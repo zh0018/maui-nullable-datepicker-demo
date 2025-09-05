@@ -20,83 +20,129 @@ namespace NullableDatePickerDemo.Controls
             set => SetValue(SelectedDateProperty, value);
         }
 
-        public static readonly BindableProperty FormatProperty =
+        public static readonly BindableProperty DateFormatProperty =
             BindableProperty.Create(
-                nameof(Format),
+                nameof(DateFormat),
                 typeof(string),
                 typeof(NullableDatePicker),
                 "d");
 
-        public string Format
+        public string DateFormat
         {
-            get => (string)GetValue(FormatProperty);
-            set => SetValue(FormatProperty, value);
+            get => (string)GetValue(DateFormatProperty);
+            set => SetValue(DateFormatProperty, value);
         }
 
-        private readonly DatePicker _datePicker;
-        private readonly Label _label;
-        private readonly Button _clearButton;
-        private readonly Button _pickButton;
+        public static readonly BindableProperty PlaceholderProperty =
+            BindableProperty.Create(
+                nameof(Placeholder),
+                typeof(string),
+                typeof(NullableDatePicker),
+                "请选择日期");
 
-        // 标志：是否为用户主动打开的 Picker（只有为 true 时才接受 DateSelected）
-        private bool _isUserOpeningPicker = false;
+        public string Placeholder
+        {
+            get => (string)GetValue(PlaceholderProperty);
+            set => SetValue(PlaceholderProperty, value);
+        }
+
+        readonly DatePicker _picker;
+        readonly Label _placeholderLabel;
+
+        // 用于避免程序性设置触发 DateSelected
+        bool _suppressDateSelected;
+        // 标识当前是否由用户打开 picker（只有用户交互的 DateSelected 才写回 SelectedDate）
+        bool _isUserOpeningPicker;
 
         public NullableDatePicker()
         {
-            _label = new Label { VerticalOptions = LayoutOptions.Center };
-            _datePicker = new DatePicker { IsVisible = false };
-
-            // 只有当用户主动打开 picker（Focused）时，DateSelected 才会被视为用户选择
-            _datePicker.Focused += (s, e) => _isUserOpeningPicker = true;
-            _datePicker.Unfocused += (s, e) => _isUserOpeningPicker = false;
-
-            _datePicker.DateSelected += (s, e) =>
+            _picker = new DatePicker
             {
-                // 忽略非用户触发的事件（例如控件初始化或程序性设置导致的事件）
+                Format = DateFormat,
+                HorizontalOptions = LayoutOptions.Fill,
+                VerticalOptions = LayoutOptions.Center
+            };
+
+            _placeholderLabel = new Label
+            {
+                Text = Placeholder,
+                TextColor = Colors.Gray,
+                VerticalTextAlignment = TextAlignment.Center,
+                HorizontalTextAlignment = TextAlignment.Start,
+                Padding = new Thickness(6, 0),
+                BackgroundColor = Colors.Transparent,
+                InputTransparent = true // 让触摸事件穿透到下面的 DatePicker
+            };
+
+            // 把两个控件叠放（Label 在上，点击会穿透）
+            var grid = new Grid();
+            grid.Children.Add(_picker);
+            grid.Children.Add(_placeholderLabel);
+
+            Content = grid;
+
+            // 事件
+            _picker.Focused += (s, e) =>
+            {
+                _isUserOpeningPicker = true;
+
+                // 打开前把底层日期设置为已选日期或今天，避免用户看到不合期望的起始日期
+                _suppressDateSelected = true;
+                _picker.Date = SelectedDate ?? DateTime.Today;
+                _suppressDateSelected = false;
+            };
+
+            _picker.Unfocused += (s, e) =>
+            {
+                _isUserOpeningPicker = false;
+                // 如果没有选择，显示占位文本（Label 覆盖）
+                UpdatePlaceholderVisibility();
+            };
+
+            _picker.DateSelected += (s, e) =>
+            {
+                if (_suppressDateSelected)
+                    return;
+
                 if (!_isUserOpeningPicker)
                     return;
 
-                // 将用户选择的日期写回 SelectedDate
+                // 用户确实选择了一个日期 -> 写回 SelectedDate
                 SelectedDate = e.NewDate;
-
-                // 选择完成后重置标志（Unfocused 也会重置，但这里更明确）
                 _isUserOpeningPicker = false;
             };
 
-            _pickButton = new Button { Text = "Choose date" };
-            _pickButton.Clicked += (s, e) => _datePicker.Focus();
-
-            _clearButton = new Button { Text = "Clear", IsEnabled = false };
-            _clearButton.Clicked += (s, e) => SelectedDate = null;
-
-            var stack = new StackLayout
-            {
-                Orientation = StackOrientation.Horizontal,
-                Children = { _label, _pickButton, _clearButton, _datePicker }
-            };
-
-            Content = stack;
-
-            UpdateLabel();
+            // 初始显示
+            UpdatePlaceholderVisibility();
         }
 
-        private static void OnSelectedDateChanged(BindableObject bindable, object oldValue, object newValue)
+        static void OnSelectedDateChanged(BindableObject bindable, object oldValue, object newValue)
         {
             var control = (NullableDatePicker)bindable;
-            control.UpdateLabel();
-            control._clearButton.IsEnabled = control.SelectedDate.HasValue;
 
-            // 只有在 SelectedDate 有值时，才把 DatePicker 的日期同步到已选择的日期。
-            // 如果 SelectedDate 为 null，则不覆盖底层 DatePicker 的日期（避免误触发）
-            if (control.SelectedDate.HasValue)
+            if (newValue is DateTime dt)
             {
-                control._datePicker.Date = control.SelectedDate.Value;
+                // 有值 -> 同步到底层 DatePicker（但要屏蔽触发）
+                control._suppressDateSelected = true;
+                control._picker.Date = dt;
+                control._suppressDateSelected = false;
+
+                // 确保格式为有效格式以正确显示
+                control._picker.Format = control.DateFormat;
             }
+            else
+            {
+                // 无值 -> 不把今天写回 SelectedDate，也不改底层 DatePicker 的 Date（避免触发）
+                // 我们通过占位 Label 来“遮盖”显示，底层 Format 保持有效值
+            }
+
+            control.UpdatePlaceholderVisibility();
         }
 
-        private void UpdateLabel()
+        void UpdatePlaceholderVisibility()
         {
-            _label.Text = SelectedDate?.ToString(Format) ?? "No date selected";
+            _placeholderLabel.Text = Placeholder;
+            _placeholderLabel.IsVisible = !SelectedDate.HasValue;
         }
     }
 }
